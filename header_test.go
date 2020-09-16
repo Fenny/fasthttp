@@ -174,8 +174,8 @@ func TestRequestHeaderEmptyValueFromString(t *testing.T) {
 func TestRequestRawHeaders(t *testing.T) {
 	t.Parallel()
 
-	kvs := "host: foobar\r\n" +
-		"value: b\r\n" +
+	kvs := "hOsT: foobar\r\n" +
+		"value:  b\r\n" +
 		"\r\n"
 	t.Run("normalized", func(t *testing.T) {
 		s := "GET / HTTP/1.1\r\n" + kvs
@@ -1240,13 +1240,27 @@ func TestResponseContentTypeNoDefaultNotEmpty(t *testing.T) {
 
 	var h ResponseHeader
 
-	h.noDefaultContentType = true
+	h.SetNoDefaultContentType(true)
 	h.SetContentLength(5)
 
 	headers := h.String()
 
 	if strings.Contains(headers, "Content-Type: \r\n") {
 		t.Fatalf("ResponseContentTypeNoDefaultNotEmpty fail, response: \n%+v\noutcome: \n%q\n", h, headers) //nolint:govet
+	}
+}
+
+func TestResponseDateNoDefaultNotEmpty(t *testing.T) {
+	t.Parallel()
+
+	var h ResponseHeader
+
+	h.noDefaultDate = true
+
+	headers := h.String()
+
+	if strings.Contains(headers, "\r\nDate: ") {
+		t.Fatalf("ResponseDateNoDefaultNotEmpty fail, response: \n%+v\noutcome: \n%q\n", h, headers) //nolint:govet
 	}
 }
 
@@ -2179,10 +2193,10 @@ func TestResponseHeaderReadSuccess(t *testing.T) {
 		400, 123, string(defaultContentType), "foiaaa")
 
 	// no content-type and no default
-	h.noDefaultContentType = true
+	h.SetNoDefaultContentType(true)
 	testResponseHeaderReadSuccess(t, h, "HTTP/1.1 400 OK\r\nContent-Length: 123\r\n\r\nfoiaaa",
 		400, 123, "", "foiaaa")
-	h.noDefaultContentType = false
+	h.SetNoDefaultContentType(false)
 
 	// no headers
 	testResponseHeaderReadSuccess(t, h, "HTTP/1.1 200 OK\r\n\r\naaaabbb",

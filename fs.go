@@ -259,21 +259,24 @@ type FS struct {
 	// FSHandlerCacheDuration is used by default.
 	CacheDuration time.Duration
 
-	// Suffix to add to the name of cached compressed file.
+	// Suffixes list to add to h.compressedFileSuffix depending on encoding
 	//
 	// This value has sense only if Compress is set.
 	//
-	// FSCompressedFileSuffix is used by default.
-	CompressedFileSuffix string
+	// FSCompressedFileSuffixes is used by default.
+	CompressedFileSuffixes map[string]string
 
 	once sync.Once
 	h    RequestHandler
 }
 
-// FSCompressedFileSuffix is the suffix FS adds to the original file names
+// FSCompressedFileSuffixes is the suffixes FS adds to the original file names
 // when trying to store compressed file under the new file name.
 // See FS.Compress for details.
-const FSCompressedFileSuffix = ".fasthttp.gz"
+var FSCompressedFileSuffixes = map[string]string{
+	"gzip": ".fasthttp.gz",
+	"br":   ".fasthttp.br",
+}
 
 // FSHandlerCacheDuration is the default expiration duration for inactive
 // file handlers opened by FS.
@@ -345,23 +348,24 @@ func (fs *FS) initRequestHandler() {
 	if cacheDuration <= 0 {
 		cacheDuration = FSHandlerCacheDuration
 	}
-	compressedFileSuffix := fs.CompressedFileSuffix
-	if len(compressedFileSuffix) == 0 {
-		compressedFileSuffix = FSCompressedFileSuffix
+
+	compressedFileSuffixes := fs.CompressedFileSuffixes
+	if len(compressedFileSuffixes) == 0 {
+		compressedFileSuffixes = FSCompressedFileSuffixes
 	}
 
 	h := &fsHandler{
-		root:                 root,
-		indexNames:           fs.IndexNames,
-		pathRewrite:          fs.PathRewrite,
-		generateIndexPages:   fs.GenerateIndexPages,
-		compress:             fs.Compress,
-		pathNotFound:         fs.PathNotFound,
-		acceptByteRange:      fs.AcceptByteRange,
-		cacheDuration:        cacheDuration,
-		compressedFileSuffix: compressedFileSuffix,
-		cache:                make(map[string]*fsFile),
-		compressedCache:      make(map[string]*fsFile),
+		root:                   root,
+		indexNames:             fs.IndexNames,
+		pathRewrite:            fs.PathRewrite,
+		generateIndexPages:     fs.GenerateIndexPages,
+		compress:               fs.Compress,
+		pathNotFound:           fs.PathNotFound,
+		acceptByteRange:        fs.AcceptByteRange,
+		cacheDuration:          cacheDuration,
+		compressedFileSuffixes: compressedFileSuffixes,
+		cache:                  make(map[string]*fsFile),
+		compressedCache:        make(map[string]*fsFile),
 	}
 
 	go func() {
@@ -376,15 +380,17 @@ func (fs *FS) initRequestHandler() {
 }
 
 type fsHandler struct {
-	root                 string
-	indexNames           []string
-	pathRewrite          PathRewriteFunc
-	pathNotFound         RequestHandler
-	generateIndexPages   bool
-	compress             bool
-	acceptByteRange      bool
-	cacheDuration        time.Duration
-	compressedFileSuffix string
+	root                   string
+	indexNames             []string
+	pathRewrite            PathRewriteFunc
+	pathNotFound           RequestHandler
+	generateIndexPages     bool
+	compress               bool
+	compressBrotli         bool
+	acceptByteRange        bool
+	cacheDuration          time.Duration
+	compressedFileSuffix   string
+	compressedFileSuffixes map[string]string
 
 	cache           map[string]*fsFile
 	compressedCache map[string]*fsFile
@@ -710,9 +716,18 @@ func (h *fsHandler) handleRequest(ctx *RequestCtx) {
 	mustCompress := false
 	fileCache := h.cache
 	byteRange := ctx.Request.Header.peek(strRange)
-	if len(byteRange) == 0 && h.compress && ctx.Request.Header.HasAcceptEncodingBytes(strGzip) {
-		mustCompress = true
-		fileCache = h.compressedCache
+	if len(byteRange) == 0 && h.compress {
+		for i, v := range h.compressedFileSuffixes {
+			if ctx.Request.Header.HasAcceptEncodingBytes([]byte(i)) {
+				mustCompress = true
+				fileCache = h.compressedCache
+				cfs := v
+				if len(cfs) == 0 {
+					cfs = FSCompressedFileSuffixes[i]
+				}
+				h.compressedFileSuffix = cfs
+			}
+		}
 	}
 
 	h.cacheLock.Lock()
@@ -955,9 +970,11 @@ func (h *fsHandler) createDirIndex(base *URI, dirPath string, mustCompress bool)
 	filenames := make([]string, 0, len(fileinfos))
 	for _, fi := range fileinfos {
 		name := fi.Name()
-		if strings.HasSuffix(name, h.compressedFileSuffix) {
-			// Do not show compressed files on index page.
-			continue
+		for _, cfs := range h.compressedFileSuffixes {
+			if strings.HasSuffix(name, cfs) {
+				// Do not show compressed files on index page.
+				continue
+			}
 		}
 		fm[name] = fi
 		filenames = append(filenames, name)
@@ -1028,9 +1045,13 @@ func (h *fsHandler) compressAndOpenFSFile(filePath string) (*fsFile, error) {
 		return nil, errDirIndexRequired
 	}
 
-	if strings.HasSuffix(filePath, h.compressedFileSuffix) ||
-		fileInfo.Size() > fsMaxCompressibleFileSize ||
-		!isFileCompressible(f, fsMinCompressRatio) {
+	for _, cfs := range h.compressedFileSuffixes {
+		if strings.HasSuffix(filePath, cfs) {
+			return h.newFSFile(f, fileInfo, false)
+		}
+	}
+
+	if fileInfo.Size() > fsMaxCompressibleFileSize || !isFileCompressible(f, fsMinCompressRatio) {
 		return h.newFSFile(f, fileInfo, false)
 	}
 

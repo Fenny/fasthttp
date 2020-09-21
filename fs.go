@@ -259,6 +259,13 @@ type FS struct {
 	// FSHandlerCacheDuration is used by default.
 	CacheDuration time.Duration
 
+	// Suffix to add to the name of cached compressed file.
+	//
+	// This value has sense only if Compress is set.
+	//
+	// FSCompressedFileSuffix is used by default.
+	CompressedFileSuffix string
+
 	// Suffixes list to add to h.compressedFileSuffix depending on encoding
 	//
 	// This value has sense only if Compress is set.
@@ -352,6 +359,12 @@ func (fs *FS) initRequestHandler() {
 	compressedFileSuffixes := fs.CompressedFileSuffixes
 	if len(compressedFileSuffixes) == 0 {
 		compressedFileSuffixes = FSCompressedFileSuffixes
+	}
+
+	compressedFileSuffix := fs.CompressedFileSuffix
+	if len(compressedFileSuffix) > 0 {
+		compressedFileSuffixes["gzip"] = compressedFileSuffix
+		compressedFileSuffixes["br"] = strings.TrimSuffix(compressedFileSuffix, filepath.Ext(compressedFileSuffix)) + ".br"
 	}
 
 	h := &fsHandler{
